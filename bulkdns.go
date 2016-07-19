@@ -3,8 +3,6 @@
 //
 // -v (--verbose) will print out some debug information and query results
 //
-// -f (--fast) use go concurrency to send queries
-//
 // -c <int> number of concurrent queries
 package main
 
@@ -22,7 +20,6 @@ import (
 
 // command line arguments
 var verbose bool = false
-var fast bool = false
 var concurrent uint = 0
 
 // list of resolvers to use
@@ -59,8 +56,6 @@ func main() {
 	// define and parse command line arguments
 	flag.BoolVar(&verbose, "verbose", false, "print more information while running")
 	flag.BoolVar(&verbose, "v", false, "print more information while running")
-	flag.BoolVar(&fast, "fast", false, "run many queries simultaniesly")
-	flag.BoolVar(&fast, "f", false, "run many queries simultaniesly")
      flag.UintVar(&concurrent, "concurrent", 1, "number of concurrent queries")
      flag.UintVar(&concurrent, "c", 1, "number of concurrent queries")
 	flag.Parse()
@@ -76,11 +71,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	if fast {
-		fastResolv(f)
-	} else {
-		slowResolv(f)
-	}
+	fastResolv(f)
 	f.Close()
 }
 
@@ -110,20 +101,6 @@ func initResolvers() {
 	}
 }
 
-// slowResolv will send one query a time and wait for the result
-func slowResolv(domains io.Reader) {
-	scanner := bufio.NewScanner(domains)
-	server := 0
-
-	for scanner.Scan() {
-		resolv(scanner.Text(), resolvers[server])
-		server = (server + 1) % len(resolvers)
-	}
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintln(os.Stderr, "reading domain list:", err)
-	}
-}
-
 // fastResolv will start a go routine to send a query. The number of go routines is limited.
 func fastResolv(domains io.Reader) {
 	var wg sync.WaitGroup
@@ -134,7 +111,7 @@ func fastResolv(domains io.Reader) {
 	for scanner.Scan() {
 		wg.Add(1)
 		threads <- "x"
-		go resolv2(scanner.Text(), resolvers[server], &wg, threads)
+		go resolv(scanner.Text(), resolvers[server], &wg, threads)
 		server = (server + 1) % len(resolvers)
 	}
 	if err := scanner.Err(); err != nil {
@@ -145,10 +122,13 @@ func fastResolv(domains io.Reader) {
 }
 
 // resolv will send a query and return the result
-func resolv(domain string, server string) []string {
+func resolv(domain string, server string, wg *sync.WaitGroup, threads <-chan string) {
 	if verbose {
 		fmt.Printf("Resolving %s using %s\n", domain, server)
 	}
+
+     defer wg.Done()
+     defer func () { _ = <-threads }()
 
 	// make result list
 	nslist := make([]string, 0)
@@ -168,16 +148,16 @@ func resolv(domain string, server string) []string {
 
 	// check for errors
 	if err != nil {
-		fmt.Printf("Error resolving %s from %s \n", domain, server, err)
-		return nil
+		fmt.Printf("%-30s: Error resolving %s (server %s)\n", domain, err, server)
+		return
 	}
 	if r == nil {
-		fmt.Printf("Error resolving %s from %s\n", domain, server)
-		return nil
+		fmt.Printf("%-30s: No answer (Server %s)\n", domain, server)
+		return
 	}
 	if r.Rcode != dns.RcodeSuccess {
-		fmt.Printf("Error resolving %s from %s (Rcode %d %s)\n", domain, server, r.Rcode, rcode2string[r.Rcode])
-		return nil
+		fmt.Printf("%-30s: %s (Rcode %d, Server %s)\n", domain, rcode2string[r.Rcode], r.Rcode, server)
+		return
 	}
 
 	// print out all NS
@@ -196,12 +176,4 @@ func resolv(domain string, server string) []string {
 	if verbose {
 		fmt.Println("")
 	}
-	return nslist
-}
-
-// resolv2 encapsultes resolv in a go routine
-func resolv2(domain string, server string, wg *sync.WaitGroup, threads <-chan string) {
-	resolv(domain, server)
-	_ = <-threads
-	wg.Done()
 }
