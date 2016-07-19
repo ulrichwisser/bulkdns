@@ -1,3 +1,11 @@
+// Bulkdns takes a file with one domain name per line as input and will request your configured resolver(s) from /etc/resolv.conf for the nameservers of these domains.
+// There are some command line arguments
+//
+// -v (--verbose) will print out some debug information and query results
+//
+// -f (--fast) use go concurrency to send queries
+//
+// -c <int> number of concurrent queries
 package main
 
 import (
@@ -12,15 +20,19 @@ import (
 	"time"
 )
 
+// command line arguments
 var verbose bool = false
 var fast bool = false
 var concurrent uint = 0
+
+// list of resolvers to use
 var resolvers = make([]string, 0)
 
 const (
 	TIMEOUT time.Duration = 5 // seconds
 )
 
+// translate rcode to human readable string
 var rcode2string = map[int]string{
 	0:  "Success",
 	1:  "Format Error",
@@ -72,6 +84,7 @@ func main() {
 	f.Close()
 }
 
+// initResolvers will read the list of resolvers from /etc/resolv.conf
 func initResolvers() {
 	conf, err := dns.ClientConfigFromFile("/etc/resolv.conf")
 	if conf == nil {
@@ -97,6 +110,7 @@ func initResolvers() {
 	}
 }
 
+// slowResolv will send one query a time and wait for the result
 func slowResolv(domains io.Reader) {
 	scanner := bufio.NewScanner(domains)
 	server := 0
@@ -110,6 +124,7 @@ func slowResolv(domains io.Reader) {
 	}
 }
 
+// fastResolv will start a go routine to send a query. The number of go routines is limited.
 func fastResolv(domains io.Reader) {
 	var wg sync.WaitGroup
 	var threads = make(chan string, concurrent)
@@ -129,6 +144,7 @@ func fastResolv(domains io.Reader) {
 	close(threads)
 }
 
+// resolv will send a query and return the result
 func resolv(domain string, server string) []string {
 	if verbose {
 		fmt.Printf("Resolving %s using %s\n", domain, server)
@@ -183,6 +199,7 @@ func resolv(domain string, server string) []string {
 	return nslist
 }
 
+// resolv2 encapsultes resolv in a go routine
 func resolv2(domain string, server string, wg *sync.WaitGroup, threads <-chan string) {
 	resolv(domain, server)
 	_ = <-threads
