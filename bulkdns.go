@@ -15,7 +15,7 @@ import (
 var verbose bool = false
 var fast bool = false
 var concurrent uint = 0
-var servers = make([]string, 0)
+var resolvers = make([]string, 0)
 
 const (
 	TIMEOUT time.Duration = 5 // seconds
@@ -86,12 +86,12 @@ func initResolvers() {
 		} else {
 			server = server + ":53"
 		}
-		servers = append(servers, server)
+		resolvers = append(resolvers, server)
 		if verbose {
 			fmt.Println("Found resolver " + server)
 		}
 	}
-	if len(servers) == 0 {
+	if len(resolvers) == 0 {
 		fmt.Println("No resolvers found.")
 		os.Exit(5)
 	}
@@ -102,8 +102,8 @@ func slowResolv(domains io.Reader) {
 	server := 0
 
 	for scanner.Scan() {
-		resolv(scanner.Text(), servers[server])
-		server = (server + 1) % len(servers)
+		resolv(scanner.Text(), resolvers[server])
+		server = (server + 1) % len(resolvers)
 	}
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintln(os.Stderr, "reading domain list:", err)
@@ -119,8 +119,8 @@ func fastResolv(domains io.Reader) {
 	for scanner.Scan() {
 		wg.Add(1)
 		threads <- "x"
-		go resolv2(scanner.Text(), servers[server], &wg, threads)
-		server = (server + 1) % len(servers)
+		go resolv2(scanner.Text(), resolvers[server], &wg, threads)
+		server = (server + 1) % len(resolvers)
 	}
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintln(os.Stderr, "reading domain list:", err)
