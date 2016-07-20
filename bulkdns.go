@@ -11,7 +11,6 @@ import (
 	"flag"
 	"fmt"
 	"github.com/miekg/dns"
-	"io"
 	"os"
 	"strings"
 	"sync"
@@ -21,9 +20,6 @@ import (
 // command line arguments
 var verbose bool = false
 var concurrent uint = 0
-
-// list of resolvers to use
-var resolvers = make([]string, 0)
 
 const (
 	TIMEOUT time.Duration = 5 // seconds
@@ -56,8 +52,8 @@ func main() {
 	// define and parse command line arguments
 	flag.BoolVar(&verbose, "verbose", false, "print more information while running")
 	flag.BoolVar(&verbose, "v", false, "print more information while running")
-     flag.UintVar(&concurrent, "concurrent", 1, "number of concurrent queries")
-     flag.UintVar(&concurrent, "c", 1, "number of concurrent queries")
+	flag.UintVar(&concurrent, "concurrent", 1, "number of concurrent queries")
+	flag.UintVar(&concurrent, "c", 1, "number of concurrent queries")
 	flag.Parse()
 
 	if flag.NArg() != 1 {
@@ -65,18 +61,40 @@ func main() {
 		os.Exit(1)
 	}
 
-	initResolvers()
+	resolvers := getResolvers()
 
+	// open domain list
 	f, err := os.Open(flag.Arg(0))
 	if err != nil {
 		panic(err)
 	}
-	fastResolv(f)
-	f.Close()
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+
+	// syncing of go routines
+	var wg sync.WaitGroup
+	var threads = make(chan string, concurrent)
+	defer close(threads)
+
+	// rotate between all resolvers
+	resolver := 0
+
+	for scanner.Scan() {
+		wg.Add(1)
+		threads <- "x"
+		go resolv(scanner.Text(), resolvers[resolver], &wg, threads)
+		resolver = (resolver + 1) % len(resolvers)
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintln(os.Stderr, "reading domain list:", err)
+	}
+	wg.Wait()
 }
 
-// initResolvers will read the list of resolvers from /etc/resolv.conf
-func initResolvers() {
+// getResolvers will read the list of resolvers from /etc/resolv.conf
+func getResolvers() []string {
+	resolvers := make([]string, 0)
+
 	conf, err := dns.ClientConfigFromFile("/etc/resolv.conf")
 	if conf == nil {
 		fmt.Printf("Cannot initialize the local resolver: %s\n", err)
@@ -99,26 +117,7 @@ func initResolvers() {
 		fmt.Println("No resolvers found.")
 		os.Exit(5)
 	}
-}
-
-// fastResolv will start a go routine to send a query. The number of go routines is limited.
-func fastResolv(domains io.Reader) {
-	var wg sync.WaitGroup
-	var threads = make(chan string, concurrent)
-	scanner := bufio.NewScanner(domains)
-	server := 0
-
-	for scanner.Scan() {
-		wg.Add(1)
-		threads <- "x"
-		go resolv(scanner.Text(), resolvers[server], &wg, threads)
-		server = (server + 1) % len(resolvers)
-	}
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintln(os.Stderr, "reading domain list:", err)
-	}
-	wg.Wait()
-	close(threads)
+	return resolvers
 }
 
 // resolv will send a query and return the result
@@ -127,8 +126,8 @@ func resolv(domain string, server string, wg *sync.WaitGroup, threads <-chan str
 		fmt.Printf("Resolving %s using %s\n", domain, server)
 	}
 
-     defer wg.Done()
-     defer func () { _ = <-threads }()
+	defer func() { _ = <-threads }()
+	defer wg.Done()
 
 	// make result list
 	nslist := make([]string, 0)
