@@ -1,2 +1,2 @@
 # bulkdns
-Make bulk requests for name servers
+Make bulk requests for nameservers
